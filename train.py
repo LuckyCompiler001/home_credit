@@ -151,14 +151,6 @@ def attach_auxiliary_features(
 
 
 def train() -> None:
-    try:
-        import lightgbm as lgb
-    except ModuleNotFoundError as exc:
-        raise SystemExit(
-            'Missing dependency `lightgbm`. Install required packages first: '
-            '`pip install lightgbm pandas scikit-learn`'
-        ) from exc
-
     data_dir = DATA_DIR
     output_dir = OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -196,40 +188,24 @@ def train() -> None:
         stratify=y,
     )
 
-    pos_count = int(y_train.sum())
-    neg_count = int((1 - y_train).sum())
-    scale_pos_weight = neg_count / max(pos_count, 1)
+    logger.info('Training extremely naive constant baseline ...')
+    # Always predict the target prevalence so the loss remains simplistic.
+    baseline_prob = float(y_train.mean())
+    y_train_array = y_train.to_numpy(dtype=float, copy=False)
+    y_valid_array = y_valid.to_numpy(dtype=float, copy=False)
 
-    logger.info('Training LightGBM baseline ...')
-    model = lgb.LGBMClassifier(
-        objective='binary',
-        metric='auc',
-        boosting_type='gbdt',
-        n_estimators=N_ESTIMATORS,
-        learning_rate=LEARNING_RATE,
-        num_leaves=NUM_LEAVES,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_alpha=0.1,
-        reg_lambda=1.0,
-        random_state=RANDOM_STATE,
-        n_jobs=N_JOBS,
-        scale_pos_weight=scale_pos_weight,
-    )
+    train_pred = np.full(y_train_array.shape[0], baseline_prob, dtype=float)
+    train_naive_mae = float(np.mean(np.abs(train_pred - y_train_array)))
+    logger.info('Naive MAE loss (train): %.6f', train_naive_mae)
 
-    model.fit(
-        X_train,
-        y_train,
-        eval_set=[(X_valid, y_valid)],
-        eval_metric='auc',
-        callbacks=[lgb.early_stopping(200, first_metric_only=True), lgb.log_evaluation(100)],
-    )
+    val_pred = np.full(y_valid_array.shape[0], baseline_prob, dtype=float)
+    val_naive_mae = float(np.mean(np.abs(val_pred - y_valid_array)))
+    logger.info('Naive MAE loss (valid): %.6f', val_naive_mae)
 
-    val_pred = model.predict_proba(X_valid)[:, 1]
     val_auc = float(roc_auc_score(y_valid, val_pred))
     logger.info('Validation ROC-AUC: %.6f', val_auc)
 
-    test_pred = model.predict_proba(X_test)[:, 1]
+    test_pred = np.full(X_test.shape[0], baseline_prob, dtype=float)
 
     if sample_submission_path.exists():
         submission = pd.read_csv(sample_submission_path)
@@ -250,17 +226,20 @@ def train() -> None:
         'n_train_rows': int(X_train.shape[0]),
         'n_valid_rows': int(X_valid.shape[0]),
         'include_auxiliary': bool(INCLUDE_AUXILIARY),
+        'train_naive_mae': train_naive_mae,
+        'valid_naive_mae': val_naive_mae,
+        'baseline_probability': baseline_prob,
     }
     with metrics_path.open('w', encoding='utf-8') as handle:
         json.dump(metrics, handle, indent=2)
 
     feature_importance = pd.DataFrame(
         {
-            'feature': X.columns,
-            'importance_gain': model.booster_.feature_importance(importance_type='gain'),
-            'importance_split': model.booster_.feature_importance(importance_type='split'),
+            'feature': ['NAIVE_CONSTANT_BASELINE'],
+            'importance_gain': [0.0],
+            'importance_split': [0.0],
         }
-    ).sort_values('importance_gain', ascending=False)
+    )
     feature_importance.to_csv(output_dir / 'feature_importance.csv', index=False)
 
     logger.info('Saved submission: %s', submission_path)
