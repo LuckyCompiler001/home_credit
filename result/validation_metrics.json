@@ -1,8 +1,0 @@
-{
-  "metric": "roc_auc",
-  "value": 0.7611667359015318,
-  "n_features": 260,
-  "n_train_rows": 246008,
-  "n_valid_rows": 61503,
-  "include_auxiliary": false
-}
